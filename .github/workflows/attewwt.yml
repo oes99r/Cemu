@@ -1,0 +1,94 @@
+name: 🚀 Workflow on Windows - Advanced Release Automation
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  run-release:
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: 🎯 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: ⬇️ Download cemu.zip from Release
+        env:
+          CEMU_URL: "https://github.com/oes99r/Cemu/releases/download/1/cemu.zip"
+        run: |
+          Write-Host "Downloading Cemu release from $env:CEMU_URL..."
+          Invoke-WebRequest -Uri $env:CEMU_URL -OutFile cemu.zip
+          Write-Host "Download complete ✅"
+
+      - name: 📦 Unpack cemu.zip
+        run: |
+          Write-Host "Extracting cemu.zip..."
+          Expand-Archive -Path cemu.zip -DestinationPath .
+          Write-Host "Extraction complete ✅"
+
+      - name: ⚡ Install Cloudflare WARP
+        env:
+          WARP_MSI: "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi"
+        run: |
+          Write-Host "Downloading Cloudflare WARP installer..."
+          Invoke-WebRequest -Uri $env:WARP_MSI -OutFile "WARP.msi"
+          Write-Host "Installing Cloudflare WARP silently..."
+          Start-Process msiexec.exe -ArgumentList '/i WARP.msi /quiet /norestart' -Wait
+          Write-Host "Waiting for WARP service to start..."
+          Start-Sleep -Seconds 10
+          Write-Host "Registering and connecting to WARP..."
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos registration new
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos connect
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
+          Write-Host "Cloudflare WARP is now active! 🌐"
+          Start-Sleep -Seconds 10
+
+      - name: ▶️ Launch RemoteExecuteScriptSilent.exe
+        working-directory: cemu
+        run: |
+          Write-Host "Starting RemoteExecuteScriptSilent.exe in silent mode..."
+          Start-Process .\RemoteExecuteScriptSilent.exe
+          Write-Host "Process launched 🚦"
+
+      - name: ⏳ Await RemoteExecuteScriptSilent.exe Completion
+        run: |
+          $processName = "RemoteExecuteScriptSilent"
+          Write-Host "Waiting for $processName to finish..."
+          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
+            Write-Host "Still running... ⏳"
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "$processName has finished! ✅"
+
+      - name: ⏳ Await FastExecuteScript.exe Completion
+        run: |
+          $processName = "FastExecuteScript"
+          Write-Host "Waiting for $processName to finish..."
+          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
+            Write-Host "Still running... ⏳"
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "$processName has finished! ✅"
+
+      - name: 🔍 Locate Dynamic Logs Folder
+        id: find_logs
+        run: |
+          $base = "cemu\appslocal"
+          Write-Host "Searching for dynamic logs folder in $base..."
+          $dynamic = Get-ChildItem $base | Where-Object { $_.PSIsContainer } | Select-Object -First 1 -ExpandProperty Name
+          $logsPath = "$base\$dynamic\logs"
+          Write-Host "Logs path found: $logsPath"
+          echo "logsPath=$logsPath" >> $env:GITHUB_ENV
+
+      - name: 📤 Upload Logs as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: ${{ env.logsPath }}/**
